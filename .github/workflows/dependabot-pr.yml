@@ -1,0 +1,77 @@
+name: Test on Dependabot Pull Request
+# only run on Pull Requests that are made to the main branch
+
+on:
+  pull_request_target
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    name: Build to Test Slot
+    runs-on: ubuntu-latest
+    # Ensure that the job runs only when the PR is opened by dependabot
+    if: ${{ github.actor == 'dependabot[bot]' }}
+
+    steps:
+    - name: Git checkout
+      uses: actions/checkout@v4
+
+    - name: Setup dotnet 8.0.x
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 10.x
+
+    - name: Restore package dependencies
+      run: dotnet restore
+
+    - name: dotet build
+      run: dotnet build --no-restore --configuration Release
+      
+    - name: dotnet publish
+      run: dotnet publish -c Release -o ${{env.DOTNET_ROOT}}/myapp 
+
+    - name: zip package
+      run: |
+        cd ${{env.DOTNET_ROOT}}/myapp
+        zip -r myapp.zip .
+      
+    # Logs into Azure via OIDC (note no password)
+    - name: 'Az OIDC CLI login'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ secrets.AZURE_CLIENTID }}
+        tenant-id: ${{ secrets.AZURE_TENANTID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTIONID }}
+        # Name of the environment. Supported values are azurecloud, azurestack, azureusgovernment, azurechinacloud, azuregermancloud. Default being azurecloud
+        # environment: azurecloud
+    
+    - name: Azure CLI Publish
+      run: az webapp deployment source config-zip -g rgDoNotDeleteDemos -n ${{secrets.APP_NAME}} --slot test --src ${{env.DOTNET_ROOT}}/myapp/myapp.zip
+
+  test:
+    name: Smoke Test
+    needs: build
+    runs-on: ubuntu-latest
+    # Ensure that the job runs only when the PR is opened by dependabot
+    if: ${{ github.actor == 'dependabot[bot]' }}
+
+    steps:
+    - name: Git checkout
+      uses: actions/checkout@v4
+      
+    - name: Setup Python
+      uses: actions/setup-python@v5
+
+    - name: Install pytest
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest
+        pip install requests
+
+    - name: Test with pytest
+      run: |
+        cd test
+        pytest --url ${{secrets.TEST_URL}}

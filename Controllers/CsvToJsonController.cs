@@ -24,7 +24,7 @@ namespace CsvToJsonCore.Controllers
         }
 
         [HttpPost]
-        public ActionResult<JsonResult> Post([FromBody] string body, [FromQuery] char delimiter = ',')
+        public ActionResult<JsonResult> Post([FromBody] string body, [FromQuery] char delimiter = ';')
         {
             JsonResult resultSet = new JsonResult();
             String value;
