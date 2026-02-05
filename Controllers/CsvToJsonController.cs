@@ -33,6 +33,11 @@ namespace CsvToJsonCore.Controllers
 
             try
             {
+                // Detecta o delimitador pela primeira linha se não ficar claro (evita erro quando Logic App não envia ?delimiter=;)
+                char detectedDelimiter = DetectDelimiterFromFirstLine(body);
+                if (detectedDelimiter != '\0')
+                    delimiter = detectedDelimiter;
+
                 return Ok(ConvertCsvToJson(body, delimiter));
             }
             catch (Exception ex)
@@ -131,6 +136,45 @@ namespace CsvToJsonCore.Controllers
         /// <param name="csvContent">Conteúdo bruto do CSV.</param>
         /// <param name="delimiter">Caractere delimitador a ser substituído (ex.: ';').</param>
         /// <returns>Texto com o delimitador substituído por ',' fora de aspas.</returns>
+        /// <summary>
+        /// Detecta o delimitador de colunas pela primeira linha do CSV (cabeçalho).
+        /// Conta vírgulas e ponto e vírgula fora de aspas; retorna o que aparecer mais.
+        /// </summary>
+        /// <param name="csvContent">Conteúdo bruto do CSV.</param>
+        /// <returns>';' ou ',' conforme a primeira linha, ou '\0' se não for possível detectar.</returns>
+        private static char DetectDelimiterFromFirstLine(string csvContent)
+        {
+            if (string.IsNullOrEmpty(csvContent)) return '\0';
+
+            int firstLineEnd = csvContent.IndexOfAny(new[] { '\r', '\n' });
+            string firstLine = firstLineEnd >= 0 ? csvContent.Substring(0, firstLineEnd) : csvContent;
+            if (string.IsNullOrWhiteSpace(firstLine)) return '\0';
+
+            int commas = 0, semicolons = 0;
+            bool insideQuotes = false;
+
+            for (int i = 0; i < firstLine.Length; i++)
+            {
+                char c = firstLine[i];
+                if (c == '"')
+                {
+                    if (i + 1 < firstLine.Length && firstLine[i + 1] == '"')
+                        i++;
+                    else
+                        insideQuotes = !insideQuotes;
+                }
+                else if (!insideQuotes)
+                {
+                    if (c == ',') commas++;
+                    else if (c == ';') semicolons++;
+                }
+            }
+
+            if (semicolons > commas) return ';';
+            if (commas > semicolons) return ',';
+            return '\0';
+        }
+
         private static string NormalizeDelimiterToComma(string csvContent, char delimiter)
         {
             if (string.IsNullOrEmpty(csvContent) || delimiter == ',') return csvContent;
