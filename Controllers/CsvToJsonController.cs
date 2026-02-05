@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -24,16 +24,48 @@ namespace CsvToJsonCore.Controllers
         }
 
         [HttpPost]
-        public ActionResult<JsonResult> Post([FromBody] string body, [FromQuery] char delimiter = ';')
+        public ActionResult Post([FromBody] string body, [FromQuery] char delimiter = ';')
         {
+            if (string.IsNullOrEmpty(body))
+            {
+                return BadRequest(new { error = "Corpo da requisição (CSV) está vazio ou ausente. Verifique se o Logic App envia o conteúdo do arquivo como texto no body (ex.: @body('Get_file_content_using_path') ou @body('Get_file_content_using_path')?['$content'])." });
+            }
+
+            try
+            {
+                return Ok(ConvertCsvToJson(body, delimiter));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Erro ao converter CSV para JSON. Delimiter={Delimiter}", delimiter);
+                return StatusCode(500, new { error = "Erro interno ao processar CSV.", detail = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// Converte o conteúdo CSV em um objeto JSON (lista de linhas com chaves do cabeçalho).
+        /// Se o delimitador informado não for vírgula, o corpo é normalizado (delimitador substituído por vírgula,
+        /// respeitando campos entre aspas duplas) e o parser usa sempre vírgula.
+        /// </summary>
+        /// <param name="body">Conteúdo bruto do CSV (texto).</param>
+        /// <param name="delimiter">Caractere delimitador de colunas no CSV de entrada (ex.: ';' ou ',').</param>
+        /// <returns>Objeto com propriedade 'rows' contendo um array de dicionários por linha.</returns>
+        private static JsonResult ConvertCsvToJson(string body, char delimiter)
+        {
+            // Normaliza delimitador para vírgula: substitui o delimitador de entrada por ',' (respeitando aspas)
+            // para que o parser use sempre vírgula internamente.
+            if (delimiter != ',')
+            {
+                body = NormalizeDelimiterToComma(body, delimiter);
+                delimiter = ',';
+            }
+
             JsonResult resultSet = new JsonResult();
-            String value;
-            
-            string[] headers = new string[1024]; //max of 1024 columns for now
+            string value;
+            string[] headers = new string[1024];
 
             using (TextReader sr = new StringReader(body))
             {
-                //set the delimiter type
                 var config = new CsvConfiguration(System.Globalization.CultureInfo.CurrentCulture) { Delimiter = delimiter.ToString() };
                 using var csv = new CsvReader(sr, config);
 
@@ -47,19 +79,42 @@ namespace CsvToJsonCore.Controllers
                     }
                 }
 
+                // Conta quantas colunas o cabeçalho tem (até o primeiro null)
+                int headerCount = 0;
+                while (headerCount < headers.Length && headers[headerCount] != null)
+                    headerCount++;
+
                 //read the rest of the file
                 while (csv.Read())
                 {
                     //initialize a new row object
                     var rowObject = new Dictionary<string, string>();
+                    int fieldIndex = 0;
 
                     //loop through each element in the row
                     for (int i = 0; csv.TryGetField<string>(i, out value); i++)
                     {
-                        //Add the row value with the matching header
-                        rowObject.Add(headers[i], value);
-                        //Log the results for debugging
-                        //_logger.LogWarning(value);
+                        if (i >= headerCount)
+                        {
+                            throw new InvalidOperationException(
+                                "Número de colunas na linha de dados maior que o cabeçalho. Verifique se o delimitador da requisição (?delimiter=) corresponde ao usado no CSV (ex.: ; ou ,).");
+                        }
+                        // Evita exceção por cabeçalho duplicado: usa chave única se já existir
+                        string key = headers[i];
+                        if (rowObject.ContainsKey(key))
+                        {
+                            int suffix = 1;
+                            while (rowObject.ContainsKey(key + "_" + suffix)) suffix++;
+                            key = key + "_" + suffix;
+                        }
+                        rowObject.Add(key, value);
+                        fieldIndex = i + 1;
+                    }
+
+                    if (fieldIndex < headerCount)
+                    {
+                        throw new InvalidOperationException(
+                            "Número de colunas na linha de dados menor que o cabeçalho. Verifique se o delimitador da requisição (?delimiter=) corresponde ao usado no CSV (ex.: ; ou ,).");
                     }
                     //Add the populated row object to the row array
                     resultSet.rows.Add(rowObject);
@@ -68,6 +123,50 @@ namespace CsvToJsonCore.Controllers
             }
             return resultSet;
         }
-        
+
+        /// <summary>
+        /// Substitui o delimitador por vírgula no texto CSV, respeitando campos entre aspas duplas.
+        /// Delimitadores dentro de "..." não são alterados.
+        /// </summary>
+        /// <param name="csvContent">Conteúdo bruto do CSV.</param>
+        /// <param name="delimiter">Caractere delimitador a ser substituído (ex.: ';').</param>
+        /// <returns>Texto com o delimitador substituído por ',' fora de aspas.</returns>
+        private static string NormalizeDelimiterToComma(string csvContent, char delimiter)
+        {
+            if (string.IsNullOrEmpty(csvContent) || delimiter == ',') return csvContent;
+
+            var result = new System.Text.StringBuilder(csvContent.Length);
+            bool insideQuotes = false;
+
+            for (int i = 0; i < csvContent.Length; i++)
+            {
+                char c = csvContent[i];
+
+                if (c == '"')
+                {
+                    // Aspas escapadas ("") dentro de campo: mantém e não alterna insideQuotes
+                    if (insideQuotes && i + 1 < csvContent.Length && csvContent[i + 1] == '"')
+                    {
+                        result.Append('"').Append('"');
+                        i++;
+                    }
+                    else
+                    {
+                        insideQuotes = !insideQuotes;
+                        result.Append(c);
+                    }
+                }
+                else if (c == delimiter && !insideQuotes)
+                {
+                    result.Append(',');
+                }
+                else
+                {
+                    result.Append(c);
+                }
+            }
+
+            return result.ToString();
+        }
     }
 }
