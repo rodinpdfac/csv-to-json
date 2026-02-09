@@ -49,22 +49,14 @@ namespace CsvToJsonCore.Controllers
 
         /// <summary>
         /// Converte o conteúdo CSV em um objeto JSON (lista de linhas com chaves do cabeçalho).
-        /// Se o delimitador informado não for vírgula, o corpo é normalizado (delimitador substituído por vírgula,
-        /// respeitando campos entre aspas duplas) e o parser usa sempre vírgula.
+        /// Usa o delimitador informado (ou detectado) diretamente no parser, sem normalizar o corpo,
+        /// para não quebrar campos que contenham o outro delimitador (ex.: endereço "Rua X, 123" em CSV com ;).
         /// </summary>
         /// <param name="body">Conteúdo bruto do CSV (texto).</param>
         /// <param name="delimiter">Caractere delimitador de colunas no CSV de entrada (ex.: ';' ou ',').</param>
         /// <returns>Objeto com propriedade 'rows' contendo um array de dicionários por linha.</returns>
         private static JsonResult ConvertCsvToJson(string body, char delimiter)
         {
-            // Normaliza delimitador para vírgula: substitui o delimitador de entrada por ',' (respeitando aspas)
-            // para que o parser use sempre vírgula internamente.
-            if (delimiter != ',')
-            {
-                body = NormalizeDelimiterToComma(body, delimiter);
-                delimiter = ',';
-            }
-
             JsonResult resultSet = new JsonResult();
             string value;
             string[] headers = new string[1024];
